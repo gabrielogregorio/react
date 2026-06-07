@@ -1232,6 +1232,19 @@ export function attach(
     // Not implemented.
   }
 
+  function setRenderLogEnabled(enabled: boolean) {
+    // Not implemented.
+  }
+
+  function setRenderLogSnapshotEnabled(enabled: boolean) {
+    // Not implemented.
+  }
+
+  function getRenderLogElementHTML(id: number): string | null {
+    // Not implemented.
+    return null;
+  }
+
   function setTrackedPath(path: Array<PathFrame> | null) {
     // Not implemented.
   }
@@ -1297,6 +1310,9 @@ export function attach(
     getElementAttributeByPath,
     getElementSourceFunctionById,
     renderer,
+    getRenderLogElementHTML,
+    setRenderLogEnabled,
+    setRenderLogSnapshotEnabled,
     setTraceUpdatesEnabled,
     setTrackedPath,
     startProfiling,

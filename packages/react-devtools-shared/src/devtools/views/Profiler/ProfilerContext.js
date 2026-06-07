@@ -29,7 +29,11 @@ import {useCommitFilteringAndNavigation} from './useCommitFilteringAndNavigation
 
 import type {CommitDataFrontend, ProfilingDataFrontend} from './types';
 
-export type TabID = 'flame-chart' | 'ranked-chart' | 'timeline';
+export type TabID =
+  | 'flame-chart'
+  | 'ranked-chart'
+  | 'timeline'
+  | 'render-log';
 
 export type Context = {
   // Which tab is selected in the Profiler UI?

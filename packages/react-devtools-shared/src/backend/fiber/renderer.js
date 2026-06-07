@@ -847,6 +847,34 @@ export function attach(
   let traceUpdatesEnabled: boolean = false;
   const traceUpdatesForNodes: Set<HostInstance> = new Set();
 
+  // Render Log: a real-time, ordered stream of components that re-rendered.
+  // Independent from traceUpdates (which only tracks host nodes for highlighting).
+  // Each commit produces a list of entries in tree order (parents before children),
+  // which preserves the "render chain" ordering the UI displays.
+  let renderLogEnabled: boolean = false;
+  // When true, also capture an outerHTML snapshot per render (EXPENSIVE).
+  let renderLogSnapshotEnabled: boolean = false;
+  // Pending entries for the current commit. We hold the DevToolsInstance so we
+  // can resolve host nodes (and optionally their outerHTML) AFTER the commit,
+  // when the DOM reflects this render.
+  let renderLogForCommit: Array<{
+    instance: DevToolsInstance,
+    name: string,
+    depth: number,
+    type: ElementType,
+    isUserCode: boolean,
+    source: ReactFunctionLocation | null,
+    path: Array<string>,
+  }> = [];
+  // Cache of resolved source location keyed by component type. Computing source
+  // from a fiber is expensive (stack parse) and never changes per type, so we
+  // memoize it. `undefined` = not computed yet; `null` = computed, no source
+  // (e.g. minified production) — treated as user code so we never hide all.
+  const renderLogSourceCache: Map<mixed, ReactFunctionLocation | null> =
+    new Map();
+  // Max length of a captured outerHTML snapshot (truncated beyond this).
+  const RENDER_LOG_HTML_MAX = 50000;
+
   function applyComponentFilters(
     componentFilters: Array<ComponentFilter>,
     nextActivitySlice: null | Fiber,
@@ -4358,6 +4386,112 @@ export function attach(
     return updateFlags;
   }
 
+  // Render Log: compute the component "depth" by counting unfiltered component
+  // ancestors. This is the depth within the rendered tree, used by the UI to
+  // limit how deep a render chain is logged.
+  function getRenderLogDepth(fiber: Fiber): number {
+    let depth = 0;
+    let current: null | Fiber = fiber.return;
+    while (current !== null) {
+      const elementType = getElementTypeForFiber(current);
+      if (
+        elementType === ElementTypeFunction ||
+        elementType === ElementTypeClass ||
+        elementType === ElementTypeContext ||
+        elementType === ElementTypeMemo ||
+        elementType === ElementTypeForwardRef
+      ) {
+        if (!shouldFilterFiber(current)) {
+          depth++;
+        }
+      }
+      current = current.return;
+    }
+    return depth;
+  }
+
+  // Render Log: resolve the source location of a component, memoized per type.
+  // Returns null when unavailable (e.g. minified production).
+  function getRenderLogSource(fiber: Fiber): ReactFunctionLocation | null {
+    const type = fiber.type;
+    const cached = renderLogSourceCache.get(type);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    let source: ReactFunctionLocation | null = null;
+    try {
+      const dispatcherRef = getDispatcherRef(renderer);
+      const stackFrame =
+        dispatcherRef == null
+          ? null
+          : getSourceLocationByFiber(ReactTypeOfWork, fiber, dispatcherRef);
+      if (stackFrame !== null) {
+        source = extractLocationFromComponentStack(stackFrame);
+      }
+    } catch (error) {
+      // Leave as null.
+    }
+
+    renderLogSourceCache.set(type, source);
+    return source;
+  }
+
+  // Render Log: the chain of unfiltered component ancestor names, root-first.
+  function getRenderLogPath(fiber: Fiber): Array<string> {
+    const path: Array<string> = [];
+    let current: null | Fiber = fiber.return;
+    while (current !== null) {
+      const elementType = getElementTypeForFiber(current);
+      if (
+        (elementType === ElementTypeFunction ||
+          elementType === ElementTypeClass ||
+          elementType === ElementTypeContext ||
+          elementType === ElementTypeMemo ||
+          elementType === ElementTypeForwardRef) &&
+        !shouldFilterFiber(current)
+      ) {
+        const ancestorName = getDisplayNameForFiber(current);
+        if (ancestorName !== null) {
+          path.push(ancestorName);
+        }
+      }
+      current = current.return;
+    }
+    path.reverse(); // root-first
+    return path;
+  }
+
+  // Render Log: record one component that re-rendered in the current commit.
+  // Entries are pushed in tree-traversal order (parents before children), which
+  // the frontend uses to reconstruct the render chain. HTML snapshots (if
+  // enabled) are resolved later, after the commit, via the held instance.
+  function recordRenderLogEntry(
+    fiberInstance: FiberInstance,
+    fiber: Fiber,
+    elementType: ElementType,
+  ): void {
+    if (shouldFilterFiber(fiber)) {
+      return;
+    }
+    const name = getDisplayNameForFiber(fiber);
+    if (name === null) {
+      return;
+    }
+    const source = getRenderLogSource(fiber);
+    const isUserCode =
+      source === null ? true : source[1].indexOf('node_modules') === -1;
+    renderLogForCommit.push({
+      instance: fiberInstance,
+      name,
+      depth: getRenderLogDepth(fiber),
+      type: elementType,
+      isUserCode,
+      source,
+      path: getRenderLogPath(fiber),
+    });
+  }
+
   // Returns whether closest unfiltered fiber parent needs to reset its child list.
   function updateFiberRecursively(
     fiberInstance: null | FiberInstance | FilteredFiberInstance, // null if this should be filtered
@@ -4394,6 +4528,19 @@ export function attach(
               prevFiber,
               nextFiber,
             );
+
+            // Render Log: record this component if it actually rendered.
+            // We record here (rather than in traceUpdates) because we want the
+            // component itself, not the nearest host node, and we want every
+            // depth level — not just leaves.
+            if (
+              renderLogEnabled &&
+              traceNearestHostComponentUpdate &&
+              fiberInstance !== null &&
+              fiberInstance.kind === FIBER_INSTANCE
+            ) {
+              recordRenderLogEntry(fiberInstance, nextFiber, elementType);
+            }
           }
         }
       }
@@ -5105,6 +5252,10 @@ export function attach(
       traceUpdatesForNodes.clear();
     }
 
+    if (renderLogEnabled) {
+      renderLogForCommit = [];
+    }
+
     // Handle multi-renderer edge-case where only some v16 renderers support profiling.
     const isProfilingSupported = rootSupportsProfiling(root);
 
@@ -5177,6 +5328,42 @@ export function attach(
 
     if (traceUpdatesEnabled) {
       hook.emit('traceUpdates', traceUpdatesForNodes);
+    }
+
+    if (renderLogEnabled && renderLogForCommit.length > 0) {
+      // Resolve host nodes (and optional HTML snapshots) now, after the commit,
+      // so the DOM reflects this render.
+      const entries = renderLogForCommit.map(pending => {
+        let htmlSnapshot = null;
+        if (renderLogSnapshotEnabled) {
+          try {
+            const hostInstances = findAllCurrentHostInstances(pending.instance);
+            if (hostInstances.length > 0) {
+              const node: any = hostInstances[0];
+              if (typeof node.outerHTML === 'string') {
+                htmlSnapshot = node.outerHTML.slice(0, RENDER_LOG_HTML_MAX);
+              }
+            }
+          } catch (error) {
+            // Ignore; leave snapshot null.
+          }
+        }
+        return {
+          id: pending.instance.id,
+          name: pending.name,
+          depth: pending.depth,
+          type: pending.type,
+          isUserCode: pending.isUserCode,
+          path: pending.path,
+          source: pending.source,
+          htmlSnapshot,
+        };
+      });
+
+      hook.emit('renderLog', {
+        commitTime: getCurrentTime(),
+        entries,
+      });
     }
 
     currentRoot = (null: any);
@@ -8036,6 +8223,35 @@ export function attach(
     traceUpdatesEnabled = isEnabled;
   }
 
+  function setRenderLogEnabled(isEnabled: boolean): void {
+    renderLogEnabled = isEnabled;
+    if (!isEnabled) {
+      renderLogForCommit = [];
+    }
+  }
+
+  function setRenderLogSnapshotEnabled(isEnabled: boolean): void {
+    renderLogSnapshotEnabled = isEnabled;
+  }
+
+  // Render Log: read the CURRENT outerHTML of an element by id (used when the
+  // user clicks a log row and snapshots are off).
+  function getRenderLogElementHTML(id: number): string | null {
+    try {
+      const hostInstances = findHostInstancesForElementID(id);
+      if (hostInstances === null || hostInstances.length === 0) {
+        return null;
+      }
+      const node: any = hostInstances[0];
+      if (typeof node.outerHTML === 'string') {
+        return node.outerHTML.slice(0, RENDER_LOG_HTML_MAX);
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
   function hasElementWithId(id: number): boolean {
     return idToDevToolsInstanceMap.has(id);
   }
@@ -8141,6 +8357,9 @@ export function attach(
     overrideValueAtPath,
     renamePath,
     renderer,
+    getRenderLogElementHTML,
+    setRenderLogEnabled,
+    setRenderLogSnapshotEnabled,
     setTraceUpdatesEnabled,
     setTrackedPath,
     startProfiling,

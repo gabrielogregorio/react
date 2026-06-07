@@ -201,6 +201,30 @@ export type ChangeDescription = {
   hooks?: Array<number> | null,
 };
 
+// Render Log: one component that re-rendered, with its depth in the render tree.
+export type RenderLogEntry = {
+  // DevTools element id, used to highlight / inspect / fetch live HTML.
+  id: number,
+  name: string,
+  depth: number,
+  type: ElementType,
+  // True if defined in user code (outside node_modules). Unknown sources
+  // (e.g. minified production) default to true.
+  isUserCode: boolean,
+  // Ancestor component names, root-first (the path to reach this component).
+  path: Array<string>,
+  // Source location ([name, file, line, col]) or null if unavailable.
+  source: ReactFunctionLocation | null,
+  // outerHTML captured at render time, only when snapshots are enabled; else null.
+  htmlSnapshot: string | null,
+};
+
+// Render Log: all components that re-rendered in a single commit, in tree order.
+export type RenderLogCommit = {
+  commitTime: number,
+  entries: Array<RenderLogEntry>,
+};
+
 export type CommitDataBackend = {
   // Tuple of fiber ID and change description
   changeDescriptions: Array<[number, ChangeDescription]> | null,
@@ -472,6 +496,9 @@ export type RendererInterface = {
     newPath: Array<string | number>,
   ) => void,
   renderer: ReactRenderer | null,
+  getRenderLogElementHTML: (id: number) => string | null,
+  setRenderLogEnabled: (enabled: boolean) => void,
+  setRenderLogSnapshotEnabled: (enabled: boolean) => void,
   setTraceUpdatesEnabled: (enabled: boolean) => void,
   setTrackedPath: (path: Array<PathFrame> | null) => void,
   startProfiling: (

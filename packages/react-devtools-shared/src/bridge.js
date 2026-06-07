@@ -17,6 +17,7 @@ import type {
   RendererID,
   DevToolsHookSettings,
   ProfilingSettings,
+  RenderLogCommit,
 } from 'react-devtools-shared/src/backend/types';
 import type {StyleAndLayout as StyleAndLayoutPayload} from 'react-devtools-shared/src/backend/NativeStyleEditor/types';
 
@@ -211,6 +212,8 @@ export type BackendEvents = {
   environmentNames: [Array<string>],
   profilingData: [ProfilingDataBackend],
   profilingStatus: [boolean],
+  renderLog: [RenderLogCommit],
+  renderLogElementHTML: [{id: number, html: string | null}],
   reloadAppForProfiling: [],
   saveToClipboard: [string],
   selectElement: [number | null],
@@ -265,6 +268,9 @@ export type FrontendEvents = {
   renamePath: [RenamePath],
   savedPreferences: [SavedPreferencesParams],
   setTraceUpdatesEnabled: [boolean],
+  setRenderLogEnabled: [boolean],
+  setRenderLogSnapshotEnabled: [boolean],
+  getRenderLogElementHTML: [{id: number, rendererID: RendererID}],
   shutdown: [],
   startInspectingHost: [boolean],
   startProfiling: [StartProfilingParams],
