@@ -15,6 +15,7 @@ import TabBar from '../TabBar';
 import ClearProfilingDataButton from './ClearProfilingDataButton';
 import CommitFlamegraph from './CommitFlamegraph';
 import CommitRanked from './CommitRanked';
+import RenderLog from './RenderLog';
 import RootSelector from './RootSelector';
 import {Timeline} from 'react-devtools-timeline/src/Timeline';
 import SidebarEventInfo from './SidebarEventInfo';
@@ -63,7 +64,8 @@ function Profiler(_: {}) {
 
   const {supportsTimeline} = useContext(StoreContext);
 
-  const isLegacyProfilerSelected = selectedTabID !== 'timeline';
+  const isLegacyProfilerSelected =
+    selectedTabID !== 'timeline' && selectedTabID !== 'render-log';
 
   const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
     const correctModifier = isMac ? event.metaKey : event.ctrlKey;
@@ -110,7 +112,11 @@ function Profiler(_: {}) {
   }, []);
 
   let view = null;
-  if (didRecordCommits || selectedTabID === 'timeline') {
+  if (
+    didRecordCommits ||
+    selectedTabID === 'timeline' ||
+    selectedTabID === 'render-log'
+  ) {
     switch (selectedTabID) {
       case 'flame-chart':
         view = <CommitFlamegraph />;
@@ -120,6 +126,9 @@ function Profiler(_: {}) {
         break;
       case 'timeline':
         view = <Timeline />;
+        break;
+      case 'render-log':
+        view = <RenderLog />;
         break;
       default:
         break;
@@ -182,7 +191,7 @@ function Profiler(_: {}) {
             />
             <RootSelector />
             <div className={styles.Spacer} />
-            {!isLegacyProfilerSelected && (
+            {selectedTabID === 'timeline' && (
               <div
                 ref={searchInputContainerRef}
                 className={styles.TimelineSearchInputContainer}
@@ -201,7 +210,9 @@ function Profiler(_: {}) {
             <ModalDialog />
           </div>
         </div>
-        <div className={styles.RightColumn}>{sidebar}</div>
+        {selectedTabID !== 'render-log' && (
+          <div className={styles.RightColumn}>{sidebar}</div>
+        )}
         <SettingsModal />
       </div>
     </SettingsModalContextController>
@@ -217,7 +228,7 @@ const OnlyTimelineData = () => (
   </div>
 );
 
-const tabs = [
+const baseTabs = [
   {
     id: 'flame-chart',
     icon: 'flame-chart',
@@ -232,8 +243,17 @@ const tabs = [
   },
 ];
 
+const renderLogTab = {
+  id: 'render-log',
+  icon: 'timeline',
+  label: 'Render Log',
+  title: 'Log ao vivo dos componentes re-renderizados',
+};
+
+const tabs = [...baseTabs, null, renderLogTab];
+
 const tabsWithTimeline = [
-  ...tabs,
+  ...baseTabs,
   null, // Divider/separator
   {
     id: 'timeline',
@@ -241,6 +261,8 @@ const tabsWithTimeline = [
     label: 'Timeline',
     title: 'Timeline',
   },
+  null,
+  renderLogTab,
 ];
 
 export default portaledContent(Profiler) as component();

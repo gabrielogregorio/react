@@ -214,6 +214,11 @@ export function attach(
     overrideValueAtPath() {},
     renamePath() {},
     renderer,
+    getRenderLogElementHTML() {
+      return null;
+    },
+    setRenderLogEnabled() {},
+    setRenderLogSnapshotEnabled() {},
     setTraceUpdatesEnabled() {},
     setTrackedPath() {},
     startProfiling() {},

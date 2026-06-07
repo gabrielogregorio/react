@@ -31,6 +31,7 @@ import type {
   RendererInterface,
   DevToolsHookSettings,
   InspectedElement,
+  RenderLogCommit,
 } from './types';
 import type {
   ComponentFilter,
@@ -282,6 +283,8 @@ export default class Agent extends EventEmitter<{
   _persistedSelection: PersistedSelection | null = null;
   _persistedSelectionMatch: PathMatch | null = null;
   _traceUpdatesEnabled: boolean = false;
+  _renderLogEnabled: boolean = false;
+  _renderLogSnapshotEnabled: boolean = false;
   _onReloadAndProfile:
     | ((recordChangeDescriptions: boolean, recordTimeline: boolean) => void)
     | void;
@@ -334,6 +337,12 @@ export default class Agent extends EventEmitter<{
     bridge.addListener('reloadAndProfile', this.reloadAndProfile);
     bridge.addListener('renamePath', this.renamePath);
     bridge.addListener('setTraceUpdatesEnabled', this.setTraceUpdatesEnabled);
+    bridge.addListener('setRenderLogEnabled', this.setRenderLogEnabled);
+    bridge.addListener(
+      'setRenderLogSnapshotEnabled',
+      this.setRenderLogSnapshotEnabled,
+    );
+    bridge.addListener('getRenderLogElementHTML', this.getRenderLogElementHTML);
     bridge.addListener('startProfiling', this.startProfiling);
     bridge.addListener('stopProfiling', this.stopProfiling);
     bridge.addListener('storeAsGlobal', this.storeAsGlobal);
@@ -961,6 +970,10 @@ export default class Agent extends EventEmitter<{
     this._rendererInterfaces[rendererID] = rendererInterface;
 
     rendererInterface.setTraceUpdatesEnabled(this._traceUpdatesEnabled);
+    rendererInterface.setRenderLogEnabled(this._renderLogEnabled);
+    rendererInterface.setRenderLogSnapshotEnabled(
+      this._renderLogSnapshotEnabled,
+    );
 
     // When the renderer is attached, we need to tell it whether
     // we remember the previous selection that we'd like to restore.
@@ -984,6 +997,41 @@ export default class Agent extends EventEmitter<{
         renderer.setTraceUpdatesEnabled(traceUpdatesEnabled);
       }
     };
+
+  setRenderLogEnabled: (renderLogEnabled: boolean) => void =
+    renderLogEnabled => {
+      this._renderLogEnabled = renderLogEnabled;
+
+      for (const rendererID in this._rendererInterfaces) {
+        const renderer = ((this._rendererInterfaces[
+          (rendererID: any)
+        ]: any): RendererInterface);
+        renderer.setRenderLogEnabled(renderLogEnabled);
+      }
+    };
+
+  setRenderLogSnapshotEnabled: (enabled: boolean) => void = enabled => {
+    this._renderLogSnapshotEnabled = enabled;
+
+    for (const rendererID in this._rendererInterfaces) {
+      const renderer = ((this._rendererInterfaces[
+        (rendererID: any)
+      ]: any): RendererInterface);
+      renderer.setRenderLogSnapshotEnabled(enabled);
+    }
+  };
+
+  getRenderLogElementHTML: ({
+    id: number,
+    rendererID: RendererID,
+  }) => void = ({id, rendererID}) => {
+    const renderer = this._rendererInterfaces[rendererID];
+    let html = null;
+    if (renderer != null) {
+      html = renderer.getRenderLogElementHTML(id);
+    }
+    this._bridge.send('renderLogElementHTML', {id, html});
+  };
 
   syncSelectionFromBuiltinElementsPanel: () => void = () => {
     const target = window.__REACT_DEVTOOLS_GLOBAL_HOOK__.$0;
@@ -1108,6 +1156,10 @@ export default class Agent extends EventEmitter<{
 
   onTraceUpdates: (nodes: Set<HostInstance>) => void = nodes => {
     this.emit('traceUpdates', nodes);
+  };
+
+  onRenderLog: (commit: RenderLogCommit) => void = commit => {
+    this._bridge.send('renderLog', commit);
   };
 
   onFastRefreshScheduled: () => void = () => {
